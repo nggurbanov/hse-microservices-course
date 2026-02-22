@@ -1,0 +1,131 @@
+specification {
+    element person {
+        style {
+            shape person
+            color green
+        }
+    }
+    element softwareSystem
+    element container
+    element component
+}
+
+model {
+  buyer = person "Покупатель" "Ищет товары и оформляет заказы"
+  seller = person "Продавец" "Управляет своим каталогом товаров"
+
+  marketplace = softwareSystem "Marketplace Platform" {
+    apiGateway = container "API Gateway" {
+      description "Маршрутизация запросов, управление доступом, rate limiting"
+      technology "Kong / Nginx"
+    }
+
+    frontend = container "Веб-приложение" "Пользовательский интерфейс маркетплейса" "React / Vue"
+
+    userService = container "User Service" {
+      description "Управление профилями (покупатели, продавцы), аутентификация"
+      technology "Go"
+    }
+
+    catalogService = container "Catalog Service" {
+      description "Управление товарным каталогом, ценами, остатками"
+      technology "Python, FastAPI"
+    }
+
+    feedService = container "Feed Service" {
+      description "Персонализированная выдача ленты товаров и поиск"
+      technology "Java, Spring Boot"
+    }
+
+    orderService = container "Order Service" {
+      description "Оформление заказов и управление их статусом"
+      technology "Go"
+    }
+
+    paymentService = container "Payment Service" {
+      description "Расчёт и учёт платежей, взаимодействие с внешними шлюзами"
+      technology "Python, Django"
+    }
+
+    notificationService = container "Notification Service" {
+      description "Отправка уведомлений (email, push) о статусах заказов"
+      technology "Node.js"
+    }
+
+    postgresUserDb = container "PostgreSQL User DB" {
+      description "Хранение данных пользователей"
+      technology "Database"
+      style { shape cylinder }
+    }
+
+    postgresCatalogDb = container "PostgreSQL Catalog DB" {
+      description "Хранение товаров и остатков"
+      technology "Database"
+      style { shape cylinder }
+    }
+
+    postgresOrderDb = container "PostgreSQL Order DB" {
+      description "Хранение заказов и платежей"
+      technology "Database"
+      style { shape cylinder }
+    }
+
+    elasticsearch = container "Elasticsearch" {
+      description "Хранение витрины товаров для поиска и персонализированной выдачи"
+      technology "Search Engine"
+      style { shape cylinder }
+    }
+
+    redis = container "Redis" {
+      description "Кэширование API Gateway и сессий пользователей"
+      technology "In-memory data store"
+    }
+
+    kafka = container "Kafka" {
+      description "Брокер сообщений для асинхронного взаимодействия"
+      technology "Message Broker"
+      style { shape queue }
+    }
+  }
+
+  buyer -> marketplace.apiGateway "Использует API" "HTTPS"
+  seller -> marketplace.apiGateway "Управляет каталогом" "HTTPS"
+  
+  marketplace.apiGateway -> marketplace.frontend "Отдает веб-интерфейс" "HTTPS"
+  marketplace.apiGateway -> marketplace.userService "Маршрутизирует запросы авторизации" "JSON/HTTPS"
+  marketplace.apiGateway -> marketplace.catalogService "Маршрутизирует запросы управления товарами" "JSON/HTTPS"
+  marketplace.apiGateway -> marketplace.feedService "Маршрутизирует поисковые запросы" "JSON/HTTPS"
+  marketplace.apiGateway -> marketplace.orderService "Маршрутизирует запросы по заказам" "JSON/HTTPS"
+  marketplace.apiGateway -> marketplace.paymentService "Маршрутизирует платежи" "JSON/HTTPS"
+  marketplace.apiGateway -> marketplace.notificationService "Запрашивает статус уведомлений" "JSON/HTTPS"
+
+  marketplace.userService -> marketplace.postgresUserDb "Читает/Пишет" "SQL"
+  marketplace.catalogService -> marketplace.postgresCatalogDb "Читает/Пишет" "SQL"
+  marketplace.orderService -> marketplace.postgresOrderDb "Читает/Пишет заказы" "SQL"
+  marketplace.paymentService -> marketplace.postgresOrderDb "Читает/Пишет платежи" "SQL"
+  
+  marketplace.feedService -> marketplace.elasticsearch "Поиск и чтение агрегированных данных" "REST API"
+
+  marketplace.apiGateway -> marketplace.redis "Кэширует" "Redis Protocol"
+
+  // async через Kafka
+  marketplace.catalogService -> marketplace.kafka "Пушит изменения товаров" "product_events"
+  marketplace.feedService -> marketplace.kafka "Обновляет индекс по событиям" "product_events"
+  
+  marketplace.orderService -> marketplace.kafka "Публикует события статуса заказа" "order_events"
+  marketplace.paymentService -> marketplace.kafka "Слушает события заказа для инициализации оплаты" "order_events"
+  marketplace.paymentService -> marketplace.kafka "Публикует результат оплаты" "payment_events"
+  marketplace.orderService -> marketplace.kafka "Слушает результат оплаты для перевода заказа" "payment_events"
+
+  marketplace.notificationService -> marketplace.kafka "Рассылка уведомлений" "order_events, payment_events"
+
+  // sync
+  marketplace.orderService -> marketplace.catalogService "Резерв товара" "gRPC"
+  marketplace.orderService -> marketplace.userService "Получение данных покупателя" "gRPC"
+}
+
+view containers {
+  level container
+  include marketplace.*
+  includeRelationships *
+}
