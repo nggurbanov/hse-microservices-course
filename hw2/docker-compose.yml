@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: marketplace
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U user -d marketplace" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  flyway:
+    image: flyway/flyway:9-alpine
+    command: -url=jdbc:postgresql://db:5432/marketplace -user=user -password=password -connectRetries=60 migrate
+    volumes:
+      - ./db/migration:/flyway/sql
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+    environment:
+      - DB_URL=postgres://user:password@db:5432/marketplace?sslmode=disable
