@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  booking-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: booking
+      POSTGRES_PASSWORD: booking
+      POSTGRES_DB: booking
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booking -d booking"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  flight-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: flight
+      POSTGRES_PASSWORD: flight
+      POSTGRES_DB: flight
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flight -d flight"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+
+  booking-flyway:
+    image: flyway/flyway:10-alpine
+    command: -url=jdbc:postgresql://booking-db:5432/booking -user=booking -password=booking -connectRetries=60 migrate
+    volumes:
+      - ./db/booking:/flyway/sql
+    depends_on:
+      booking-db:
+        condition: service_healthy
+
+  flight-flyway:
+    image: flyway/flyway:10-alpine
+    command: -url=jdbc:postgresql://flight-db:5432/flight -user=flight -password=flight -connectRetries=60 migrate
+    volumes:
+      - ./db/flight:/flyway/sql
+    depends_on:
+      flight-db:
+        condition: service_healthy
+
+  flight-service:
+    image: golang:1.25-alpine
+    working_dir: /app
+    command: sh -c "go mod download && go run ./cmd/flight"
+    volumes:
+      - .:/app
+    depends_on:
+      flight-flyway:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    environment:
+      DB_URL: postgres://flight:flight@flight-db:5432/flight?sslmode=disable
+      REDIS_ADDR: redis:6379
+      GRPC_ADDR: :50051
+      FLIGHT_API_KEY: hw3-secret
+    ports:
+      - "50051:50051"
+
+  booking-service:
+    image: golang:1.25-alpine
+    working_dir: /app
+    command: sh -c "go mod download && go run ./cmd/booking"
+    volumes:
+      - .:/app
+    depends_on:
+      booking-flyway:
+        condition: service_completed_successfully
+      flight-service:
+        condition: service_started
+    environment:
+      DB_URL: postgres://booking:booking@booking-db:5432/booking?sslmode=disable
+      HTTP_ADDR: :8080
+      FLIGHT_GRPC_ADDR: flight-service:50051
+      FLIGHT_API_KEY: hw3-secret
+    ports:
+      - "8080:8080"
