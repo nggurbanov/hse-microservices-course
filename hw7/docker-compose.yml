@@ -1,0 +1,182 @@
+services:
+  booking-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: booking
+      POSTGRES_PASSWORD: booking
+      POSTGRES_DB: booking
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booking -d booking"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "5433:5432"
+
+  flight-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: flight
+      POSTGRES_PASSWORD: flight
+      POSTGRES_DB: flight
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flight -d flight"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "5434:5432"
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "6379:6379"
+
+  booking-flyway:
+    image: flyway/flyway:10-alpine
+    command: -url=jdbc:postgresql://booking-db:5432/booking -user=booking -password=booking -connectRetries=60 migrate
+    volumes:
+      - ./db/booking:/flyway/sql
+    depends_on:
+      booking-db:
+        condition: service_healthy
+
+  flight-flyway:
+    image: flyway/flyway:10-alpine
+    command: -url=jdbc:postgresql://flight-db:5432/flight -user=flight -password=flight -connectRetries=60 migrate
+    volumes:
+      - ./db/flight:/flyway/sql
+    depends_on:
+      flight-db:
+        condition: service_healthy
+
+  flight-service:
+    build:
+      context: .
+      target: flight
+    depends_on:
+      flight-flyway:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      DB_URL: postgres://flight:flight@flight-db:5432/flight?sslmode=disable
+      REDIS_ADDR: redis:6379
+      GRPC_ADDR: :50051
+      METRICS_ADDR: :9090
+      FLIGHT_API_KEY: hw7-secret
+    ports:
+      - "50051:50051"
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  booking-service:
+    build:
+      context: .
+      target: booking
+    depends_on:
+      booking-flyway:
+        condition: service_completed_successfully
+      flight-service:
+        condition: service_healthy
+    environment:
+      DB_URL: postgres://booking:booking@booking-db:5432/booking?sslmode=disable
+      HTTP_ADDR: :8080
+      FLIGHT_GRPC_ADDR: flight-service:50051
+      FLIGHT_API_KEY: hw7-secret
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  booking-postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://booking:booking@booking-db:5432/booking?sslmode=disable
+    depends_on:
+      booking-db:
+        condition: service_healthy
+    ports:
+      - "9187:9187"
+
+  flight-postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://flight:flight@flight-db:5432/flight?sslmode=disable
+    depends_on:
+      flight-db:
+        condition: service_healthy
+    ports:
+      - "9188:9187"
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "9121:9121"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml
+    depends_on:
+      booking-service:
+        condition: service_healthy
+      flight-service:
+        condition: service_healthy
+    ports:
+      - "9091:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      prometheus:
+        condition: service_started
+    ports:
+      - "3000:3000"
+
+  k6:
+    image: grafana/k6:0.53.0
+    profiles: ["tools"]
+    volumes:
+      - ./load:/scripts
+      - ./artifacts:/artifacts
+    depends_on:
+      booking-service:
+        condition: service_healthy

@@ -1,0 +1,67 @@
+name: HW7 CI
+
+on:
+  push:
+    paths:
+      - 'hw7/**'
+      - '.github/workflows/hw7-ci.yml'
+  pull_request:
+    paths:
+      - 'hw7/**'
+      - '.github/workflows/hw7-ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hw7
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: hw7/go.mod
+          cache-dependency-path: hw7/go.sum
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Build docker images
+        run: docker compose build
+
+      - name: Start system
+        run: docker compose up -d
+
+      - name: Wait for system
+        run: ./scripts/wait_for_system.sh
+
+      - name: Integration tests
+        run: ./scripts/integration_test.sh
+
+      - name: E2E tests
+        run: ./scripts/e2e_test.sh
+
+      - name: Load test
+        run: ./scripts/load_test.sh
+
+      - name: Prometheus SLI check
+        run: ./scripts/check_prometheus_sli.sh
+
+      - name: Collect docker logs
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose ps > artifacts/docker-ps.txt
+          docker compose logs --no-color > artifacts/docker-compose.log
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw7-ci-artifacts
+          path: hw7/artifacts
+
+      - name: Stop system
+        if: always()
+        run: docker compose down -v
